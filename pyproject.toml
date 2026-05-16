@@ -1,0 +1,80 @@
+[project]
+name = "mcp-ferry"
+dynamic = ["version"]
+description = "Bridge local stdio MCP servers to public HTTPS behind Cloudflare Access Managed OAuth"
+readme = "README.md"
+requires-python = ">=3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Darlin Alberto" }]
+keywords = ["mcp", "model-context-protocol", "cloudflare-tunnel", "cloudflare-access", "oauth", "stdio", "proxy"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Internet :: Proxy Servers",
+    "Typing :: Typed",
+]
+dependencies = [
+    "typer>=0.15",
+    "pydantic>=2.10",
+    "starlette>=0.46",
+    "sse-starlette>=2.2",
+    "uvicorn>=0.34",
+    "httpx>=0.28",
+    "pycloudflared>=0.2",
+    "rich>=13.9",
+    "cloudflare>=5.0,<6",
+]
+
+[project.urls]
+Homepage = "https://github.com/dalberto/mcp-ferry"
+Repository = "https://github.com/dalberto/mcp-ferry"
+Issues = "https://github.com/dalberto/mcp-ferry/issues"
+Changelog = "https://github.com/dalberto/mcp-ferry/blob/main/CHANGELOG.md"
+
+[project.scripts]
+ferry = "mcp_ferry.cli:app"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "ruff>=0.9",
+    "pyright>=1.1",
+]
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/mcp_ferry/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_ferry"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC"]
+
+[tool.pyright]
+pythonVersion = "3.14"
+typeCheckingMode = "strict"
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

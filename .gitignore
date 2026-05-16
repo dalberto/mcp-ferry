@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+dist/
+build/
+*.egg-info/
+.DS_Store
+# build-time, written by hatch-vcs
+src/mcp_ferry/_version.py
+uv.lock

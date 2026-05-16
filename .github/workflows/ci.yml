@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # hatch-vcs needs tags/history for the version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # uv run provisions a managed Python 3.14 (per requires-python) and a
+      # project venv with the dev extra. No --system, so it sidesteps the
+      # runners' externally-managed (PEP 668) interpreters.
+      - name: Ruff
+        run: uv run --extra dev ruff check .
+
+      - name: Pyright
+        run: uv run --extra dev pyright src/mcp_ferry
+
+      - name: Tests
+        run: uv run --extra dev pytest -q
