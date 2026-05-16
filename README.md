@@ -1,8 +1,8 @@
 # mcp-ferry
 
 [![CI](https://github.com/dalberto/mcp-ferry/actions/workflows/ci.yml/badge.svg)](https://github.com/dalberto/mcp-ferry/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/mcp-ferry)](https://pypi.org/project/mcp-ferry/)
-[![Python](https://img.shields.io/pypi/pyversions/mcp-ferry)](https://pypi.org/project/mcp-ferry/)
+[![PyPI](https://img.shields.io/pypi/v/mcp-ferry?cacheSeconds=3600)](https://pypi.org/project/mcp-ferry/)
+[![Python](https://img.shields.io/pypi/pyversions/mcp-ferry?cacheSeconds=3600)](https://pypi.org/project/mcp-ferry/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 Some MCP servers only speak stdio. They run as a subprocess on your machine
