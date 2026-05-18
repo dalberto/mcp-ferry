@@ -19,6 +19,7 @@ from starlette.routing import Route
 if TYPE_CHECKING:
     from .config import FerryConfig
     from .transport import StdioMCP
+    from .tunnel import TunnelManager
 
 logger = logging.getLogger(__name__)
 
@@ -149,18 +150,24 @@ def build_app(
     config: FerryConfig,
     transports: dict[str, StdioMCP],
     manage_lifecycle: bool = False,
+    tunnel: TunnelManager | None = None,
 ) -> Starlette:
     routes: list[Route] = []
 
     async def healthz(_request: Request) -> Response:
-        all_ok = all(t.health for t in transports.values())
         status = {
             name: ("ok" if t.health else "down") for name, t in transports.items()
         }
-        return JSONResponse(
-            {"status": "ok" if all_ok else "degraded", "mcps": status},
-            status_code=200 if all_ok else 503,
-        )
+        payload: dict[str, Any] = {"mcps": status}
+        all_ok = all(s == "ok" for s in status.values())
+        if tunnel is not None:
+            # The tunnel is the part that died overnight; without it here,
+            # /healthz reported "ok" while the bridge was unreachable.
+            tunnel_ok = tunnel.health
+            payload["tunnel"] = "ok" if tunnel_ok else "down"
+            all_ok = all_ok and tunnel_ok
+        payload["status"] = "ok" if all_ok else "degraded"
+        return JSONResponse(payload, status_code=200 if all_ok else 503)
 
     routes.append(Route("/healthz", healthz, methods=["GET"]))
 

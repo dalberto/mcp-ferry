@@ -37,6 +37,49 @@ def test_healthz(client: TestClient) -> None:
     assert r.json() == {"status": "ok", "mcps": {"echo": "ok"}}
 
 
+class _FakeTunnel:
+    def __init__(self, *, healthy: bool) -> None:
+        self._healthy = healthy
+
+    @property
+    def health(self) -> bool:
+        return self._healthy
+
+
+def test_healthz_includes_tunnel_when_present() -> None:
+    cfg = _ferry_config()
+    transports = {m.name: StdioMCP(m) for m in cfg.mcps}
+    app = build_app(
+        cfg,
+        transports,
+        manage_lifecycle=True,
+        tunnel=_FakeTunnel(healthy=True),  # type: ignore[arg-type]
+    )
+    with TestClient(app) as c:
+        r = c.get("/healthz")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok", "mcps": {"echo": "ok"}, "tunnel": "ok"}
+
+
+def test_healthz_degraded_when_tunnel_down() -> None:
+    """MCPs up but the tunnel dead must surface as 503 — the overnight case."""
+    cfg = _ferry_config()
+    transports = {m.name: StdioMCP(m) for m in cfg.mcps}
+    app = build_app(
+        cfg,
+        transports,
+        manage_lifecycle=True,
+        tunnel=_FakeTunnel(healthy=False),  # type: ignore[arg-type]
+    )
+    with TestClient(app) as c:
+        r = c.get("/healthz")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "degraded"
+    assert body["tunnel"] == "down"
+    assert body["mcps"] == {"echo": "ok"}
+
+
 def test_initialize_assigns_session_and_echoes(client: TestClient) -> None:
     r = client.post(
         "/echo",

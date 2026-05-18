@@ -6,8 +6,10 @@ import asyncio
 import json
 import logging
 import subprocess
+import sys
 import urllib.error
 import urllib.request
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
@@ -39,6 +41,10 @@ tunnel_name = "mcp-ferry"
 # dashboard URL / the zone's Overview page):
 # account_id = "<cloudflare-account-id>"
 # zone_id = "<zone-id-for-your-hostname>"
+# How long a client (e.g. claude.ai) stays authenticated before re-auth.
+# Default "168h" (1 week). Use "24h" for tighter security or "730h" (~1
+# month) for fewer prompts. Takes effect on the next `ferry setup`.
+# session_duration = "168h"
 
 [[mcps]]
 name = "bear"
@@ -55,7 +61,14 @@ command = "/Applications/Bear.app/Contents/MacOS/bearcli mcp-server"
 ConfigOpt = Annotated[Path, typer.Option("--config", help="Path to config.toml")]
 ForceOpt = Annotated[bool, typer.Option("--force", help="Overwrite an existing config")]
 FollowOpt = Annotated[bool, typer.Option("-f", "--follow", help="Tail and follow")]
-StreamOpt = Annotated[str, typer.Option("--stream", help="'out' or 'err'")]
+StreamOpt = Annotated[
+    str,
+    typer.Option(
+        "--stream",
+        help="'main' (rotated ferry.log, default), or 'out'/'err' for the "
+        "LaunchAgent boot files (pre-init tracebacks only)",
+    ),
+]
 TokenOpt = Annotated[
     str | None,
     typer.Option(
@@ -134,12 +147,36 @@ def _load_config(config_path: Path) -> FerryConfig:
         raise typer.Exit(1) from None
 
 
+LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB
+LOG_BACKUP_COUNT = 5  # ~60 MiB ceiling total; cloudflared is chatty at INFO
+
+
 def _setup_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+    """Rotate the primary log in-process; launchd can't bound its own files.
+
+    launchd's StandardErrorPath grows forever (cloudflared logs every reconnect
+    overnight). So the structured stream goes to a size-capped RotatingFileHandler
+    and reaches stderr only on a TTY — under launchd there's no TTY, so the
+    LaunchAgent .err.log stays near-empty (just pre-init tracebacks).
+    """
+    launchd.LOG_DIR.mkdir(parents=True, exist_ok=True)
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-7s %(name)s: %(message)s", datefmt="%H:%M:%S"
     )
+    handlers: list[logging.Handler] = []
+    file_handler = RotatingFileHandler(
+        launchd.LOG_DIR / "ferry.log",
+        maxBytes=LOG_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(fmt)
+    handlers.append(file_handler)
+    if sys.stderr is not None and sys.stderr.isatty():
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(fmt)
+        handlers.append(stream_handler)
+    logging.basicConfig(level=logging.INFO, handlers=handlers, force=True)
 
 
 @app.command()
@@ -215,6 +252,7 @@ def setup(
         google_client_secret=gsecret,
         allowed_emails=allowed_emails,
         allowed_redirect_uris=redirect_uris,
+        session_duration=config.cloudflare.session_duration,
     )
 
     console.print("[cyan]provisioning Cloudflare resources…[/]")
@@ -362,9 +400,10 @@ def status(config_path: ConfigOpt = DEFAULT_CONFIG_PATH) -> None:
 
 
 @app.command()
-def logs(follow: FollowOpt = False, stream: StreamOpt = "out") -> None:
-    """Tail the LaunchAgent log file."""
-    log_file = launchd.LOG_DIR / f"ferry.{stream}.log"
+def logs(follow: FollowOpt = False, stream: StreamOpt = "main") -> None:
+    """Tail the rotated ferry.log (or the LaunchAgent boot files via --stream)."""
+    name = "ferry.log" if stream == "main" else f"ferry.{stream}.log"
+    log_file = launchd.LOG_DIR / name
     if not log_file.exists():
         console.print(f"[yellow]no log file at {log_file} yet[/]")
         raise typer.Exit(1)

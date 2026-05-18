@@ -294,3 +294,77 @@ async def test_tunnel_manager_wait_without_start_raises() -> None:
     mgr = TunnelManager(_sample_config(credentials_file=Path("/tmp/x")))
     with pytest.raises(RuntimeError, match="not started"):
         await mgr.wait()
+
+
+async def test_health_tracks_per_connection_up_and_down(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A connection dropping without the process exiting must show in health.
+
+    Regression: `ready_event` latched True on first connect and never cleared,
+    so /healthz reported "ok" while every edge connection was actually down.
+    """
+    creds = tmp_path / "fake.json"
+    creds.write_text("{}")
+    config_dir = tmp_path / ".cloudflared"
+    monkeypatch.setattr(tunnel_mod, "CLOUDFLARED_DIR", config_dir)
+    monkeypatch.setattr(tunnel_mod, "CONFIG_YAML", config_dir / "config.yml")
+    monkeypatch.setattr(tunnel_mod, "cloudflared_binary", lambda: "/fake/cloudflared")
+
+    fake_proc = _FakeProc(
+        [
+            b"INF Registered tunnel connection connIndex=0\n",
+            b"INF Registered tunnel connection connIndex=1\n",
+            b'ERR Connection terminated error="boom" connIndex=0\n',
+            b"",
+        ]
+    )
+
+    async def fake_exec(*_a: str, **_kw: object) -> _FakeProc:
+        return fake_proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    mgr = TunnelManager(_sample_config(credentials_file=creds))
+    await mgr.start()
+    assert mgr._stderr_task is not None
+    await mgr._stderr_task  # drain the scripted stderr
+
+    # conn 0 terminated, conn 1 still live → still reachable, still healthy.
+    assert mgr._live_conns == {1}
+    assert mgr.health is True
+
+
+async def test_health_false_when_all_connections_drop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    creds = tmp_path / "fake.json"
+    creds.write_text("{}")
+    config_dir = tmp_path / ".cloudflared"
+    monkeypatch.setattr(tunnel_mod, "CLOUDFLARED_DIR", config_dir)
+    monkeypatch.setattr(tunnel_mod, "CONFIG_YAML", config_dir / "config.yml")
+    monkeypatch.setattr(tunnel_mod, "cloudflared_binary", lambda: "/fake/cloudflared")
+
+    fake_proc = _FakeProc(
+        [
+            b"INF Registered tunnel connection connIndex=0\n",
+            b"ERR Connection terminated connIndex=0\n",
+            b"",
+        ]
+    )
+
+    async def fake_exec(*_a: str, **_kw: object) -> _FakeProc:
+        return fake_proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    mgr = TunnelManager(_sample_config(credentials_file=creds))
+    await mgr.start()
+    assert mgr._stderr_task is not None
+    await mgr._stderr_task
+
+    # Process still alive, but zero live connections → unhealthy (the zombie).
+    assert mgr._live_conns == set()
+    assert mgr.health is False
+    # ready_event stayed set (connected once) — proving it can't be the signal.
+    assert mgr.ready_event.is_set()

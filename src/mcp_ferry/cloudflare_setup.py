@@ -31,7 +31,11 @@ IDP_NAME = "Google (mcp-ferry)"
 # Stable name (not per-email) so re-running setup reconciles the one allow-list
 # policy instead of accumulating one policy per email.
 POLICY_NAME = "mcp-ferry allow-list"
-APP_SESSION_DURATION = "24h"
+# Default Access session lifetime before a client must re-auth. 24h meant
+# claude.ai forced a fresh OAuth flow every morning; 1 week is the chosen
+# convenience/security balance. Overridable per-deployment via config.toml's
+# [cloudflare] session_duration (threaded through SetupInputs).
+APP_SESSION_DURATION = "168h"
 ACCESS_TOKEN_LIFETIME = "1h"
 # Public (non-localhost) redirect URIs allowed for dynamically-registered OAuth
 # clients. Without this, Managed OAuth rejects any hosted client's callback
@@ -63,6 +67,7 @@ class SetupInputs:
     google_client_secret: str
     allowed_emails: tuple[str, ...]
     allowed_redirect_uris: tuple[str, ...] = DEFAULT_ALLOWED_REDIRECT_URIS
+    session_duration: str = APP_SESSION_DURATION
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,7 +242,9 @@ def ensure_google_idp(
     return provider_id
 
 
-def _managed_oauth_config(allowed_redirect_uris: tuple[str, ...]) -> dict[str, Any]:
+def _managed_oauth_config(
+    allowed_redirect_uris: tuple[str, ...], session_duration: str
+) -> dict[str, Any]:
     """Managed OAuth: Cloudflare acts as the authorization server for MCP clients.
 
     Dynamic client registration (RFC 7591) is what lets a remote MCP client
@@ -256,7 +263,7 @@ def _managed_oauth_config(allowed_redirect_uris: tuple[str, ...]) -> dict[str, A
         },
         "grant": {
             "access_token_lifetime": ACCESS_TOKEN_LIFETIME,
-            "session_duration": APP_SESSION_DURATION,
+            "session_duration": session_duration,
         },
     }
 
@@ -268,6 +275,7 @@ def ensure_access_application(
     hostname: str,
     idp_id: str,
     allowed_redirect_uris: tuple[str, ...],
+    session_duration: str = APP_SESSION_DURATION,
 ) -> str:
     """Create an mcp-type Access app with Managed OAuth + the Google IdP.
 
@@ -279,7 +287,7 @@ def ensure_access_application(
     name = f"mcp-ferry ({hostname})"
     oauth = cast(
         "_app_params.McpServerApplicationOAuthConfiguration",
-        _managed_oauth_config(allowed_redirect_uris),
+        _managed_oauth_config(allowed_redirect_uris, session_duration),
     )
     destinations = cast(
         "list[_app_params.McpServerApplicationDestinationPublicDestination]",
@@ -299,7 +307,7 @@ def ensure_access_application(
             name=name,
             destinations=destinations,
             allowed_idps=[idp_id],
-            session_duration=APP_SESSION_DURATION,
+            session_duration=session_duration,
             oauth_configuration=oauth,
             auto_redirect_to_identity=True,
         )
@@ -457,6 +465,7 @@ def run_setup(inputs: SetupInputs) -> SetupResult:
         hostname=inputs.hostname,
         idp_id=idp_id,
         allowed_redirect_uris=inputs.allowed_redirect_uris,
+        session_duration=inputs.session_duration,
     )
     policy_id = ensure_access_policy(
         client,

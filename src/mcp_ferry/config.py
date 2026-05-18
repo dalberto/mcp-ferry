@@ -43,6 +43,14 @@ class CloudflareConfig(BaseModel):
         default=None,
         description="Override the default hosted-client OAuth redirect URI allowlist",
     )
+    session_duration: str = Field(
+        default="168h",
+        description=(
+            "Cloudflare Access session lifetime before a client (e.g. claude.ai) "
+            "must re-authenticate. Cloudflare duration string: '24h', '168h' (1 "
+            "week, default), '730h' (~1 month). Applied on the next `ferry setup`."
+        ),
+    )
 
 
 class MCPConfig(BaseModel):

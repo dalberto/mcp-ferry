@@ -55,8 +55,6 @@ def test_render_plist_is_valid_xml_and_matches_snapshot() -> None:
         "\t</dict>\n"
         "\t<key>KeepAlive</key>\n"
         "\t<dict>\n"
-        "\t\t<key>NetworkState</key>\n"
-        "\t\t<true/>\n"
         "\t\t<key>SuccessfulExit</key>\n"
         "\t\t<false/>\n"
         "\t</dict>\n"
@@ -84,7 +82,7 @@ def test_render_plist_is_valid_xml_and_matches_snapshot() -> None:
     assert parsed["Label"] == LABEL
     assert parsed["ProgramArguments"] == ["/opt/homebrew/bin/ferry", "run"]
     assert parsed["RunAtLoad"] is True
-    assert parsed["KeepAlive"] == {"SuccessfulExit": False, "NetworkState": True}
+    assert parsed["KeepAlive"] == {"SuccessfulExit": False}
     assert parsed["EnvironmentVariables"] == {"PATH": "/usr/bin:/bin"}
     assert parsed["StandardOutPath"].endswith("ferry.out.log")
     assert parsed["StandardErrorPath"].endswith("ferry.err.log")

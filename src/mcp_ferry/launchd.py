@@ -29,7 +29,11 @@ def render_plist(ferry_executable: Path, log_dir: Path, path_env: str) -> str:
         "Label": LABEL,
         "ProgramArguments": [str(ferry_executable), "run"],
         "RunAtLoad": True,
-        "KeepAlive": {"SuccessfulExit": False, "NetworkState": True},
+        # Restart on any non-zero exit (server died / crash). A clean exit 0
+        # only happens on SIGINT/SIGTERM (manual stop, uninstall) — stay down
+        # then. `NetworkState` is a no-op subkey on modern macOS; the tunnel
+        # self-heals in-process, so it isn't needed and only muddied semantics.
+        "KeepAlive": {"SuccessfulExit": False},
         "StandardOutPath": str(log_dir / "ferry.out.log"),
         "StandardErrorPath": str(log_dir / "ferry.err.log"),
         "EnvironmentVariables": {"PATH": path_env},

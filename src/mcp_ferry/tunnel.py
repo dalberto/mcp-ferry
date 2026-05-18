@@ -22,6 +22,14 @@ logger = logging.getLogger(__name__)
 CLOUDFLARED_DIR = Path.home() / ".cloudflared"
 CONFIG_YAML = CLOUDFLARED_DIR / "config.yml"
 READY_PATTERN = re.compile(r"Registered tunnel connection", re.IGNORECASE)
+# cloudflared runs 4 edge connections (connIndex 0-3). These mark one going
+# down without the process exiting — the "zombie tunnel" case that made
+# /healthz lie. We track live connIndexes so health reflects real reachability.
+CONN_DOWN_PATTERN = re.compile(
+    r"Unregistered tunnel connection|Connection terminated|failed to serve tunnel connection",
+    re.IGNORECASE,
+)
+CONN_INDEX_PATTERN = re.compile(r"connIndex=(\d+)")
 STOP_GRACE_SECONDS = 5.0
 
 
@@ -94,20 +102,29 @@ class TunnelManager:
         self._config = config
         self._proc: asyncio.subprocess.Process | None = None
         self._stderr_task: asyncio.Task[None] | None = None
+        self._live_conns: set[int] = set()
         self.ready_event: asyncio.Event = asyncio.Event()
 
     @property
     def health(self) -> bool:
+        """Healthy only with the process up AND >=1 live edge connection.
+
+        `ready_event` (set on first registration, never cleared) only proves
+        the tunnel connected once — it stayed True through every overnight
+        drop. Live-connection tracking is what makes /healthz tell the truth.
+        """
         return (
             self._proc is not None
             and self._proc.returncode is None
-            and self.ready_event.is_set()
+            and len(self._live_conns) > 0
         )
 
     async def start(self) -> None:
         creds = self._config.cloudflare.credentials_file or discover_credentials_file(
             self._config.cloudflare.tunnel_name
         )
+        # Fresh incarnation: drop connIndexes from any prior (crashed) process.
+        self._live_conns.clear()
         CLOUDFLARED_DIR.mkdir(parents=True, exist_ok=True)
         CONFIG_YAML.write_text(render_config_yaml(self._config, creds))
 
@@ -138,8 +155,16 @@ class TunnelManager:
                 break
             text = line.decode(errors="replace").rstrip()
             logger.info("[cloudflared] %s", text)
-            if not self.ready_event.is_set() and READY_PATTERN.search(text):
+            idx_match = CONN_INDEX_PATTERN.search(text)
+            conn = int(idx_match.group(1)) if idx_match else None
+            if READY_PATTERN.search(text):
+                # -1 is a sentinel for the rare format without connIndex: never
+                # let a parse miss read as "down" — /healthz is observational,
+                # so a false-healthy is safer than a false-dead flap.
+                self._live_conns.add(conn if conn is not None else -1)
                 self.ready_event.set()
+            elif conn is not None and CONN_DOWN_PATTERN.search(text):
+                self._live_conns.discard(conn)
 
     async def ready(self) -> None:
         await self.ready_event.wait()
