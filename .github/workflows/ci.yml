@@ -9,6 +9,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Run bundled JS actions (checkout, setup-uv) on Node 24; Node 20 is
+# deprecated on the runners (forced 2026-06-02, removed 2026-09-16).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test:
     strategy:
@@ -28,12 +33,14 @@ jobs:
 
       # uv run provisions a managed Python 3.14 (per requires-python) and a
       # project venv with the dev extra. No --system, so it sidesteps the
-      # runners' externally-managed (PEP 668) interpreters.
+      # runners' externally-managed (PEP 668) interpreters. --locked forces
+      # the committed uv.lock, so CI resolves exactly what passes locally —
+      # an unpinned fresh resolve is what turned CI red while local was green.
       - name: Ruff
-        run: uv run --extra dev ruff check .
+        run: uv run --locked --extra dev ruff check .
 
       - name: Pyright
-        run: uv run --extra dev pyright src/mcp_ferry
+        run: uv run --locked --extra dev pyright src/mcp_ferry
 
       - name: Tests
-        run: uv run --extra dev pytest -q
+        run: uv run --locked --extra dev pytest -q

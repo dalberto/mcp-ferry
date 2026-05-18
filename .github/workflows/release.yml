@@ -4,6 +4,11 @@ on:
   push:
     tags: ["v*"]
 
+# Run bundled JS actions (checkout, setup-uv, upload/download-artifact) on
+# Node 24; Node 20 is deprecated on the runners (forced 2026-06-02).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
