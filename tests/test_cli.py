@@ -47,10 +47,105 @@ def test_init_force_overwrites(runner: CliRunner, tmp_path: Path) -> None:
 def test_logs_missing_file(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr("mcp_ferry.launchd.LOG_DIR", tmp_path / "nope")
+    monkeypatch.setattr("mcp_ferry.cli.LOG_DIR", tmp_path / "nope")
     result = runner.invoke(app, ["logs"])
     assert result.exit_code == 1
     assert "no log file" in result.output
+
+
+def test_install_builds_job_with_resolved_ferry_path(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """install resolves `ferry` on PATH and hands it to launchy as program[0]."""
+    from launchy import KeepAliveConditions  # pyright: ignore[reportMissingTypeStubs]
+
+    monkeypatch.setattr("mcp_ferry.cli.LOG_DIR", tmp_path / "logs")
+
+    def fake_which(name: str) -> str:
+        del name
+        return "/opt/homebrew/bin/ferry"
+
+    monkeypatch.setattr(cli_mod.shutil, "which", fake_which)
+
+    captured: dict[str, Any] = {}
+
+    class FakeJob:
+        def __init__(self, **kwargs: Any) -> None:
+            captured["kwargs"] = kwargs
+
+        def install(self) -> Path:
+            return Path("/fake/plist")
+
+    monkeypatch.setattr(cli_mod, "Job", FakeJob)
+
+    result = runner.invoke(app, ["install"])
+    assert result.exit_code == 0, result.output
+    kw = captured["kwargs"]
+    assert kw["label"] == "io.github.dalberto.mcp-ferry"
+    assert kw["program"] == ["/opt/homebrew/bin/ferry", "run"]
+    assert kw["run_at_load"] is True
+    assert kw["keep_alive"] == KeepAliveConditions(successful_exit=False)
+    assert kw["stdout_path"] == tmp_path / "logs" / "ferry.out.log"
+    assert kw["stderr_path"] == tmp_path / "logs" / "ferry.err.log"
+    assert (tmp_path / "logs").is_dir()
+
+
+def test_install_errors_when_ferry_not_on_path(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_ferry(name: str) -> str | None:
+        del name
+        return None
+
+    monkeypatch.setattr(cli_mod.shutil, "which", no_ferry)
+    result = runner.invoke(app, ["install"])
+    assert result.exit_code != 0
+    assert isinstance(result.exception, RuntimeError)
+
+
+def test_uninstall_calls_job_uninstall(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+
+    class FakeJob:
+        def __init__(self, **kwargs: Any) -> None:
+            assert kwargs["label"] == "io.github.dalberto.mcp-ferry"
+
+        def uninstall(self) -> None:
+            calls.append("uninstall")
+
+    monkeypatch.setattr(cli_mod, "Job", FakeJob)
+
+    result = runner.invoke(app, ["uninstall"])
+    assert result.exit_code == 0, result.output
+    assert calls == ["uninstall"]
+    assert "uninstalled" in result.output
+
+
+def test_status_renders_loaded_pid_and_exit_code(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from launchy import JobStatus  # pyright: ignore[reportMissingTypeStubs]
+
+    class FakeJob:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def status(self) -> JobStatus:
+            return JobStatus(
+                label="io.github.dalberto.mcp-ferry",
+                loaded=True,
+                pid=4242,
+                last_exit_code=None,
+            )
+
+    monkeypatch.setattr(cli_mod, "Job", FakeJob)
+    # Point status at a nonexistent config so it skips the /healthz probe.
+    result = runner.invoke(app, ["status", "--config", str(tmp_path / "missing.toml")])
+    assert result.exit_code == 0, result.output
+    assert "yes" in result.output
+    assert "4242" in result.output
 
 
 def _write_starter_config(path: Path) -> None:

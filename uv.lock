@@ -144,6 +144,15 @@ wheels = [
 ]
 
 [[package]]
+name = "launchy"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8d/f4/c6d7e2ee82d39271fb78ba615f556ea57b3db1df80a510c3b0e80673ecd3/launchy-0.1.1.tar.gz", hash = "sha256:c5f83bc24ad2150c2ab73bc55cb8a376c2f35e444f71331d53691f643b3bdf73", size = 46138, upload-time = "2026-05-26T01:44:07.039Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bc/63/8b3d15d0277e54bd456df570df92855c5a3c11f0496f28a37f140673cc62/launchy-0.1.1-py3-none-any.whl", hash = "sha256:b07e674fb878a1d315d5f2ae155e3a66fa497cc8e9087eed8ad56d2ab13cc287", size = 30368, upload-time = "2026-05-26T01:44:05.645Z" },
+]
+
+[[package]]
 name = "markdown-it-py"
 version = "4.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -161,6 +170,7 @@ source = { editable = "." }
 dependencies = [
     { name = "cloudflare" },
     { name = "httpx" },
+    { name = "launchy" },
     { name = "pycloudflared" },
     { name = "pydantic" },
     { name = "rich" },
@@ -182,6 +192,7 @@ dev = [
 requires-dist = [
     { name = "cloudflare", specifier = ">=5.0,<6" },
     { name = "httpx", specifier = ">=0.28" },
+    { name = "launchy", specifier = ">=0.1.1" },
     { name = "pycloudflared", specifier = ">=0.2" },
     { name = "pydantic", specifier = ">=2.10" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1" },

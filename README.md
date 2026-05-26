@@ -359,7 +359,7 @@ path = "/things"
 command = "uvx things-mcp"
 ```
 
-Restart the bridge (`launchctl kickstart -k gui/$UID/dev.ascention.mcp-ferry`
+Restart the bridge (`launchctl kickstart -k gui/$UID/io.github.dalberto.mcp-ferry`
 or just `ferry uninstall && ferry install`). The new MCP appears at
 `https://<hostname>/things`. No new tunnel, no new Access app needed.
 

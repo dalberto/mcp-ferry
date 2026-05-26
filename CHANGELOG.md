@@ -5,6 +5,25 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-25
+
+### Changed
+
+- LaunchAgent integration now uses the [`launchy`](https://github.com/dalberto/launchy)
+  library (>= 0.1.1) instead of hand-rolled `plistlib` + `launchctl` plumbing.
+  The `mcp_ferry.launchd` module is gone; `ferry install/uninstall/status` live
+  directly in the CLI.
+- LaunchAgent label renamed `dev.ascention.mcp-ferry` → `io.github.dalberto.mcp-ferry`.
+  Existing installs must `launchctl bootout gui/$UID/dev.ascention.mcp-ferry`
+  and remove `~/Library/LaunchAgents/dev.ascention.mcp-ferry.plist` once, then
+  run `ferry install` to register the new agent.
+
+### Fixed
+
+- `ferry install` against an already-loaded agent no longer races with the
+  prior incarnation's graceful shutdown. (Fixed upstream in launchy 0.1.1 via
+  PID-poll between `bootout` and `bootstrap`; the dep pin enforces it.)
+
 ## [0.1.1] - 2026-05-17
 
 ### Fixed

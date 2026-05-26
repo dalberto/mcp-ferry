@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -14,11 +16,36 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
 import typer
+from launchy import Job, KeepAliveConditions  # pyright: ignore[reportMissingTypeStubs]
 from rich.console import Console
 from rich.table import Table
 
-from . import cloudflare_setup, launchd, supervisor
+from . import cloudflare_setup, supervisor
 from .config import DEFAULT_CONFIG_PATH, FerryConfig
+
+LABEL = "io.github.dalberto.mcp-ferry"
+LOG_DIR = Path.home() / "Library" / "Logs" / "mcp-ferry"
+
+
+def _job(program: list[str] | None = None) -> Job:
+    """Build the LaunchAgent Job.
+
+    `program` is required only for install (the only operation that renders
+    the plist). uninstall/status use the label alone, so a placeholder is fine.
+
+    KeepAlive(successful_exit=False): restart on crash, stay down after a clean
+    SIGINT/SIGTERM so `ferry uninstall` actually stops the service.
+    """
+    return Job(
+        label=LABEL,
+        program=program or ["/usr/bin/true"],
+        run_at_load=True,
+        keep_alive=KeepAliveConditions(successful_exit=False),
+        env={"PATH": os.environ.get("PATH", "")},
+        working_dir=Path.home(),
+        stdout_path=LOG_DIR / "ferry.out.log",
+        stderr_path=LOG_DIR / "ferry.err.log",
+    )
 
 if TYPE_CHECKING:
     from cloudflare import Cloudflare
@@ -159,13 +186,13 @@ def _setup_logging() -> None:
     and reaches stderr only on a TTY — under launchd there's no TTY, so the
     LaunchAgent .err.log stays near-empty (just pre-init tracebacks).
     """
-    launchd.LOG_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
     fmt = logging.Formatter(
         "%(asctime)s %(levelname)-7s %(name)s: %(message)s", datefmt="%H:%M:%S"
     )
     handlers: list[logging.Handler] = []
     file_handler = RotatingFileHandler(
-        launchd.LOG_DIR / "ferry.log",
+        LOG_DIR / "ferry.log",
         maxBytes=LOG_MAX_BYTES,
         backupCount=LOG_BACKUP_COUNT,
         encoding="utf-8",
@@ -356,7 +383,11 @@ def run(config_path: ConfigOpt = DEFAULT_CONFIG_PATH) -> None:
 @app.command()
 def install() -> None:
     """Install and load the LaunchAgent so the bridge auto-starts at login."""
-    path = launchd.install()
+    ferry_path = shutil.which("ferry")
+    if ferry_path is None:
+        raise RuntimeError("`ferry` console script not found on PATH; install the package first")
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    path = _job(program=[ferry_path, "run"]).install()
     console.print(f"[green]installed[/] {path}")
     console.print("logs: ~/Library/Logs/mcp-ferry/")
 
@@ -364,14 +395,14 @@ def install() -> None:
 @app.command()
 def uninstall() -> None:
     """Unload and remove the LaunchAgent."""
-    launchd.uninstall()
+    _job().uninstall()
     console.print("[green]uninstalled[/]")
 
 
 @app.command()
 def status(config_path: ConfigOpt = DEFAULT_CONFIG_PATH) -> None:
     """Show LaunchAgent state and per-MCP health."""
-    agent = launchd.status()
+    agent = _job().status()
     table = Table(title="mcp-ferry status", show_header=False)
     table.add_row("loaded", "[green]yes[/]" if agent.loaded else "[red]no[/]")
     table.add_row("pid", str(agent.pid) if agent.pid else "—")
@@ -403,7 +434,7 @@ def status(config_path: ConfigOpt = DEFAULT_CONFIG_PATH) -> None:
 def logs(follow: FollowOpt = False, stream: StreamOpt = "main") -> None:
     """Tail the rotated ferry.log (or the LaunchAgent boot files via --stream)."""
     name = "ferry.log" if stream == "main" else f"ferry.{stream}.log"
-    log_file = launchd.LOG_DIR / name
+    log_file = LOG_DIR / name
     if not log_file.exists():
         console.print(f"[yellow]no log file at {log_file} yet[/]")
         raise typer.Exit(1)
