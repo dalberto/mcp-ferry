@@ -57,8 +57,6 @@ def test_install_builds_job_with_resolved_ferry_path(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """install resolves `ferry` on PATH and hands it to launchy as program[0]."""
-    from launchy import KeepAliveConditions  # pyright: ignore[reportMissingTypeStubs]
-
     monkeypatch.setattr("mcp_ferry.cli.LOG_DIR", tmp_path / "logs")
 
     def fake_which(name: str) -> str:
@@ -84,7 +82,9 @@ def test_install_builds_job_with_resolved_ferry_path(
     assert kw["label"] == "io.github.dalberto.mcp-ferry"
     assert kw["program"] == ["/opt/homebrew/bin/ferry", "run"]
     assert kw["run_at_load"] is True
-    assert kw["keep_alive"] == KeepAliveConditions(successful_exit=False)
+    # Unconditional KeepAlive (renders `<key>KeepAlive</key><true/>`): launchd
+    # always relaunches, so an OS-/operator-sent SIGTERM can't brick the bridge.
+    assert kw["keep_alive"] is True
     assert kw["stdout_path"] == tmp_path / "logs" / "ferry.out.log"
     assert kw["stderr_path"] == tmp_path / "logs" / "ferry.err.log"
     assert (tmp_path / "logs").is_dir()

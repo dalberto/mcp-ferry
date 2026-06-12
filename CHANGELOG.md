@@ -5,6 +5,16 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- LaunchAgent now uses unconditional `KeepAlive` so the bridge is relaunched
+  after any exit — including a clean OS-/operator-sent SIGTERM (memory
+  pressure, sleep/wake, power events) that previously left it dead until the
+  next login. The supervisor exits 0 on SIGINT/SIGTERM, and the old
+  `KeepAlive(SuccessfulExit=false)` told launchd not to relaunch a clean exit.
+  Stop the service with `ferry uninstall` (boots the job out of launchd).
+  Existing installs must re-run `ferry install` to re-render the plist.
+
 ## [0.2.0] - 2026-05-25
 
 ### Changed

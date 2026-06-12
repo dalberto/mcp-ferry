@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
 import typer
-from launchy import Job, KeepAliveConditions  # pyright: ignore[reportMissingTypeStubs]
+from launchy import Job  # pyright: ignore[reportMissingTypeStubs]
 from rich.console import Console
 from rich.table import Table
 
@@ -33,14 +33,17 @@ def _job(program: list[str] | None = None) -> Job:
     `program` is required only for install (the only operation that renders
     the plist). uninstall/status use the label alone, so a placeholder is fine.
 
-    KeepAlive(successful_exit=False): restart on crash, stay down after a clean
-    SIGINT/SIGTERM so `ferry uninstall` actually stops the service.
+    Unconditional KeepAlive (`<true/>`): launchd always relaunches the bridge,
+    so an OS- or operator-sent SIGTERM (memory pressure, sleep/wake, power
+    events) is recovered instead of bricking the bridge until next login. Stop
+    the service with `ferry uninstall`, which boots the job out of launchd
+    entirely so it won't relaunch.
     """
     return Job(
         label=LABEL,
         program=program or ["/usr/bin/true"],
         run_at_load=True,
-        keep_alive=KeepAliveConditions(successful_exit=False),
+        keep_alive=True,
         env={"PATH": os.environ.get("PATH", "")},
         working_dir=Path.home(),
         stdout_path=LOG_DIR / "ferry.out.log",
