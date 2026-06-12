@@ -13,11 +13,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import signal
 from typing import TYPE_CHECKING, Any
 
 import uvicorn
 
+from . import __version__
 from .server import build_app
 from .transport import StdioMCP
 from .tunnel import TunnelManager
@@ -36,21 +38,41 @@ HEALTHY_RESET_SECONDS = 30.0
 
 
 async def run(config: FerryConfig) -> int:
+    # One identifying banner per incarnation: pid + version make each launchd
+    # (re)start greppable, so "why is it a fresh process at 06:40?" is answerable
+    # from the log alone.
+    logger.info(
+        "mcp-ferry %s starting (pid=%d): %d mcp(s) [%s] on 127.0.0.1:%d, tunnel %r",
+        __version__,
+        os.getpid(),
+        len(config.mcps),
+        ", ".join(m.name for m in config.mcps),
+        config.bridge.local_port,
+        config.cloudflare.tunnel_name,
+    )
+
     transports: dict[str, StdioMCP] = {m.name: StdioMCP(m) for m in config.mcps}
     tunnel = TunnelManager(config)
     app = build_app(config, transports, tunnel=tunnel)
 
     stop = asyncio.Event()
     got_signal = False
+    signal_name: str | None = None
     loop = asyncio.get_running_loop()
 
-    def _on_signal() -> None:
-        nonlocal got_signal
+    def _on_signal(signum: int) -> None:
+        nonlocal got_signal, signal_name
         got_signal = True
+        signal_name = signal.Signals(signum).name
+        # WARNING so it stands out against cloudflared's INFO chatter, and names
+        # the exact signal — SIGTERM (launchd/OS/operator) vs SIGINT (Ctrl-C).
+        # The sender pid is not available here: asyncio's signal handler doesn't
+        # expose siginfo, so "who sent it" needs OS-level forensics (system log).
+        logger.warning("received %s — initiating clean shutdown", signal_name)
         stop.set()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _on_signal)
+        loop.add_signal_handler(sig, _on_signal, sig)
 
     for t in transports.values():
         await t.start()
@@ -168,4 +190,18 @@ async def run(config: FerryConfig) -> int:
     # 0 only on an explicit SIGINT/SIGTERM. Any other unwind (the HTTP server
     # died) is non-zero so launchd's KeepAlive(SuccessfulExit=false) restarts
     # the process instead of leaving it dead.
-    return 0 if got_signal else 1
+    if got_signal:
+        logger.info(
+            "exiting 0 after %s (clean shutdown). launchd KeepAlive(SuccessfulExit"
+            "=false) will NOT relaunch — the bridge stays down until the next "
+            "login/reboot or `launchctl kickstart`. If you did not stop it, an OS- "
+            "or operator-sent %s is why it went dark.",
+            signal_name,
+            signal_name,
+        )
+        return 0
+    logger.error(
+        "exiting 1 (HTTP server died without a signal). launchd KeepAlive will "
+        "relaunch the bridge."
+    )
+    return 1
