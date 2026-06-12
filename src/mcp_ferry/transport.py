@@ -33,7 +33,10 @@ class StdioMCP:
     def __init__(self, config: MCPConfig) -> None:
         self.config = config
         self._proc: asyncio.subprocess.Process | None = None
-        self._pending: dict[str | int, asyncio.Future[dict[str, Any]]] = {}
+        # Keyed by an internal, process-unique id (see send()), NOT the client's
+        # id — multiplexed sessions reuse client ids and would otherwise collide.
+        self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
+        self._next_id = 0
         self._stdout_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
         self._write_lock = asyncio.Lock()
@@ -113,29 +116,35 @@ class StdioMCP:
         if not self.health or self._proc is None or self._proc.stdin is None:
             raise ConnectionError(f"MCP {self.config.name} not running")
 
-        msg_id = message.get("id")
-        line = (json.dumps(message) + "\n").encode("utf-8")
-
-        if msg_id is None:
-            await self._write(line)
+        client_id = message.get("id")
+        if client_id is None:
+            # Notification: nothing to correlate, fire-and-forget.
+            await self._write((json.dumps(message) + "\n").encode("utf-8"))
             return None
 
-        if msg_id in self._pending:
-            # Reusing an in-flight id would orphan the first caller's future.
-            raise ValueError(f"duplicate in-flight JSON-RPC id {msg_id!r}")
+        # The bridge fans many independent client sessions onto one stdio
+        # subprocess. A client's JSON-RPC id is unique only within its own
+        # session, so two concurrent callers both using id=1 used to collide in
+        # _pending (raising "duplicate in-flight id"). Remap every request to a
+        # process-unique internal id on the way out and restore the caller's id
+        # on the way back — correlation is ours, the client never sees the swap.
+        internal_id = self._next_id
+        self._next_id += 1
+        line = (json.dumps({**message, "id": internal_id}) + "\n").encode("utf-8")
 
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
-        self._pending[msg_id] = future
+        self._pending[internal_id] = future
         try:
             await self._write(line)
-            return await asyncio.wait_for(future, timeout=self.config.request_timeout)
+            resp = await asyncio.wait_for(future, timeout=self.config.request_timeout)
+            return {**resp, "id": client_id}
         except TimeoutError as e:
             raise TimeoutError(
-                f"MCP {self.config.name} did not respond to id {msg_id!r} "
+                f"MCP {self.config.name} did not respond to id {client_id!r} "
                 f"within {self.config.request_timeout}s"
             ) from e
         finally:
-            self._pending.pop(msg_id, None)
+            self._pending.pop(internal_id, None)
 
     async def _write(self, line: bytes) -> None:
         assert self._proc is not None and self._proc.stdin is not None

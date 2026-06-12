@@ -151,14 +151,33 @@ async def test_large_response_over_64k_round_trips(mcp: StdioMCP) -> None:
     assert len(resp["result"]["blob"]) == size  # type: ignore[index]
 
 
-async def test_duplicate_inflight_id_rejected(mcp: StdioMCP) -> None:
-    inflight = asyncio.create_task(
-        mcp.send({"jsonrpc": "2.0", "id": "dup", "method": "sleep", "params": {"seconds": 1}})
+async def test_reused_client_id_across_concurrent_sends(mcp: StdioMCP) -> None:
+    """Two concurrent calls reusing the same client id must both complete.
+
+    The bridge multiplexes independent client sessions onto one subprocess, so
+    a client-chosen id (unique only per-session) is not unique here. Internal
+    id remapping lets both in-flight 'id=dup' calls resolve, each seeing its own
+    id and result back. Regression: this used to raise 'duplicate in-flight id',
+    which surfaced as recurring 500s in production.
+    """
+    slow = asyncio.create_task(
+        mcp.send(
+            {"jsonrpc": "2.0", "id": "dup", "method": "sleep",
+             "params": {"seconds": 0.3, "marker": "slow"}}
+        )
     )
     await asyncio.sleep(0.05)
-    with pytest.raises(ValueError, match="duplicate in-flight"):
-        await mcp.send({"jsonrpc": "2.0", "id": "dup", "method": "ping"})
-    assert (await inflight) is not None
+    fast = await mcp.send(
+        {"jsonrpc": "2.0", "id": "dup", "method": "ping", "params": {"marker": "fast"}}
+    )
+    assert fast is not None
+    assert fast["id"] == "dup"
+    assert fast["result"]["marker"] == "fast"  # type: ignore[index]
+
+    slow_resp = await slow
+    assert slow_resp is not None
+    assert slow_resp["id"] == "dup"
+    assert slow_resp["result"]["marker"] == "slow"  # type: ignore[index]
 
 
 async def test_send_after_kill_fails_fast_not_hang() -> None:
