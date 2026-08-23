@@ -1,3 +1,5 @@
+
+
 # mcp-ferry
 
 [![CI](https://github.com/dalberto/mcp-ferry/actions/workflows/ci.yml/badge.svg)](https://github.com/dalberto/mcp-ferry/actions/workflows/ci.yml)
@@ -403,7 +405,7 @@ flag that would make it easy to expose your data with no auth.
 ## Troubleshooting
 
 - `ferry status`: LaunchAgent state + per-MCP health from `/healthz`.
-- `ferry logs -f`: tail `stdout`. Pass `--stream err` for `stderr`.
+- `ferry logs -f`: tail the rotated `ferry.log` by default. Pass `--stream out` or `--stream err` for the LaunchAgent boot files.
 - `cloudflared` not finding the tunnel: confirm `cloudflare.credentials_file`
   in `config.toml` points at the JSON file the wizard wrote.
 - Access redirect loop: verify the Google authorized redirect URI is exactly
