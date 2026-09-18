@@ -31,6 +31,9 @@ MCP client ──HTTPS──► Cloudflare Edge ──Tunnel──► your machi
 
 - `mcp-ferry` runs an HTTP server (Streamable HTTP transport) on localhost.
 - Each `/<path>` proxies JSON-RPC frames to one long-lived stdio MCP subprocess.
+- Ferry initializes each subprocess once and reuses its negotiated version and
+  capabilities for subsequent client connections. After a subprocess restart,
+  ferry repeats the handshake before forwarding the next request.
 - A `cloudflared` Named Tunnel exposes that local server at `https://<hostname>`.
 - Cloudflare Access protects the hostname with [Managed OAuth][1]: Cloudflare
   acts as a full OAuth 2.1 authorization server (PKCE + RFC 7591 dynamic client

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -10,6 +11,7 @@ from mcp_ferry.config import MCPConfig
 from mcp_ferry.transport import StdioMCP
 
 ECHO = Path(__file__).parent / "fixtures" / "echo_mcp.py"
+STRICT = ECHO.with_name("strict_mcp.py")
 
 
 def _config(name: str = "echo", request_timeout: float = 300.0) -> MCPConfig:
@@ -193,3 +195,71 @@ async def test_send_after_kill_fails_fast_not_hang() -> None:
             )
     finally:
         await m.stop()
+
+
+@pytest.fixture
+async def strict_mcp():
+    m = StdioMCP(_config().model_copy(update={"command": f"{sys.executable} {STRICT}"}))
+    await m.start()
+    try:
+        yield m
+    finally:
+        await m.stop()
+
+
+def _initialize(client_id: int, **params: Any) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0", "id": client_id, "method": "initialize",
+        "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                   "clientInfo": {"name": "test", "version": "1"}, **params},
+    }
+
+
+async def test_concurrent_clients_share_one_handshake(strict_mcp: StdioMCP) -> None:
+    responses = await asyncio.gather(*(strict_mcp.send(_initialize(i)) for i in range(10)))
+    for i, response in enumerate(responses):
+        assert response is not None
+        assert response["id"] == i
+        assert response["result"]["serverInfo"]["name"] == "strict"
+        await strict_mcp.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    status = await strict_mcp.send({"jsonrpc": "2.0", "id": 11, "method": "status"})
+    assert status is not None
+    assert status["result"]["acknowledgements"] == 1
+
+
+async def test_initialize_error_is_not_cached(strict_mcp: StdioMCP) -> None:
+    failed = await strict_mcp.send(_initialize(1, reject=True))
+    assert failed is not None and "error" in failed
+    good = await strict_mcp.send(_initialize(2))
+    assert good is not None and "result" in good
+
+
+async def test_restart_reinitializes_for_existing_clients(strict_mcp: StdioMCP) -> None:
+    await strict_mcp.send(_initialize(1))
+    before = await strict_mcp.send({"jsonrpc": "2.0", "id": 2, "method": "status"})
+    await strict_mcp.stop()
+    await strict_mcp.start()
+    after = await strict_mcp.send({"jsonrpc": "2.0", "id": 3, "method": "status"})
+    assert before is not None and after is not None
+    assert after["result"]["pid"] != before["result"]["pid"]
+    assert after["result"]["acknowledgements"] == 1
+    new_client = await strict_mcp.send(_initialize(4))
+    assert new_client is not None and "result" in new_client
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_interrupted_initialize_replaces_connection(
+    strict_mcp: StdioMCP, cancel: bool
+) -> None:
+    strict_mcp.config.request_timeout = 0.15
+    task = asyncio.create_task(strict_mcp.send(_initialize(1, delay=10)))
+    if cancel:
+        await asyncio.sleep(0.05)
+        task.cancel()
+    with pytest.raises(asyncio.CancelledError if cancel else TimeoutError):
+        await task
+    await asyncio.wait_for(strict_mcp.wait(), timeout=2)
+    assert not strict_mcp.health
+    await strict_mcp.start()
+    recovered = await strict_mcp.send(_initialize(2))
+    assert recovered is not None and "result" in recovered

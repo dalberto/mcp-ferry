@@ -40,6 +40,9 @@ class StdioMCP:
         self._stdout_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
         self._write_lock = asyncio.Lock()
+        self._initialize_lock = asyncio.Lock()
+        self._initialize_request: dict[str, Any] | None = None
+        self._initialize_response: dict[str, Any] | None = None
         self._stopping = False
 
     @property
@@ -66,6 +69,7 @@ class StdioMCP:
             return  # already running; idempotent for supervisor restarts
         # Clear any residue from a previous incarnation.
         self._fail_pending(ConnectionError(f"MCP {self.config.name} restarting"))
+        self._initialize_response = None
         self._stopping = False
 
         env = {**os.environ, **self.config.env}
@@ -113,6 +117,46 @@ class StdioMCP:
         logger.info("stopped MCP %s", self.config.name)
 
     async def send(self, message: dict[str, Any]) -> dict[str, Any] | None:
+        # Remote clients have separate HTTP sessions, but share ONE stdio
+        # connection. Strict servers (including Bear) reject a second initialize.
+        if message.get("method") == "initialize" and message.get("id") is not None:
+            return await self._initialize(message)
+        if message.get("method") == "notifications/initialized":
+            # Ferry completes the upstream handshake itself, before exposing its
+            # result to any client. Client acknowledgements are session-local.
+            return None
+        if self._initialize_request is not None:
+            # Replay the handshake after a supervised subprocess restart so
+            # existing HTTP sessions can keep using the replacement process.
+            response = await self._initialize(self._initialize_request)
+            if "error" in response:
+                if message.get("id") is not None:
+                    return {**response, "id": message["id"]}
+                raise ConnectionError(f"MCP {self.config.name} reinitialization failed")
+        return await self._send(message)
+
+    async def _initialize(self, message: dict[str, Any]) -> dict[str, Any]:
+        async with self._initialize_lock:
+            if not self.health:
+                raise ConnectionError(f"MCP {self.config.name} not running")
+            if self._initialize_response is None:
+                try:
+                    response = await self._send(message)
+                    assert response is not None
+                    if "result" not in response:
+                        return response  # failed negotiation must not be cached
+                    await self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+                except BaseException:
+                    # A timeout/cancel may happen AFTER the server accepted
+                    # initialize. Retrying on that connection would wedge it;
+                    # let the supervisor replace the subprocess instead.
+                    self._force_down()
+                    raise
+                self._initialize_request = message
+                self._initialize_response = response
+            return {**self._initialize_response, "id": message["id"]}
+
+    async def _send(self, message: dict[str, Any]) -> dict[str, Any] | None:
         if not self.health or self._proc is None or self._proc.stdin is None:
             raise ConnectionError(f"MCP {self.config.name} not running")
 

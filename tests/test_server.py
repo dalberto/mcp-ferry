@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -127,3 +128,43 @@ def test_delete_session(client: TestClient) -> None:
         headers={"Accept": "application/json", "Mcp-Session-Id": sid},
     )
     assert r2.status_code == 404
+
+
+@pytest.mark.parametrize("accept", ["application/json", "text/event-stream"])
+def test_reconnecting_clients_with_strict_server(accept: str) -> None:
+    cfg = _ferry_config()
+    cfg.mcps[0].command = f"{sys.executable} {ECHO.with_name('strict_mcp.py')}"
+    transports = {m.name: StdioMCP(m) for m in cfg.mcps}
+    app = build_app(cfg, transports, manage_lifecycle=True)
+    with TestClient(app) as c:
+        sessions: list[str] = []
+        for request_id in (1, 2):
+            response = c.post(
+                "/echo",
+                json={
+                    "jsonrpc": "2.0", "id": request_id, "method": "initialize",
+                    "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                               "clientInfo": {"name": "test", "version": "1"}},
+                },
+                headers={"Accept": accept},
+            )
+            assert response.status_code == 200
+            body = response.json() if accept == "application/json" else json.loads(
+                next(line[6:] for line in response.text.splitlines() if line.startswith("data: "))
+            )
+            assert body["id"] == request_id
+            assert body["result"]["serverInfo"]["name"] == "strict"
+            sid = response.headers["mcp-session-id"]
+            assert sid not in sessions
+            sessions.append(sid)
+            headers = {"Accept": "application/json", "Mcp-Session-Id": sid}
+            assert c.post(
+                "/echo", headers=headers,
+                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            ).status_code == 202
+            tools = c.post(
+                "/echo", headers=headers,
+                json={"jsonrpc": "2.0", "id": 3, "method": "tools/list"},
+            )
+            assert tools.json()["result"] == {"tools": []}
+            assert c.delete("/echo", headers=headers).status_code == 204

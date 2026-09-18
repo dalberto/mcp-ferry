@@ -5,6 +5,18 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-18
+
+### Fixed
+
+- Multiple clients and reconnects now share one initialization handshake per
+  stdio subprocess. Strict MCP servers such as Bear previously rejected every
+  connection after the first with `initialize already received`, even though
+  OAuth and the tunnel were healthy. The handshake is replayed after a subprocess
+  restart, and interrupted handshakes force a fresh connection.
+- Concurrent clients can reuse JSON-RPC request IDs without collisions. Ferry
+  assigns unique upstream IDs and restores each client's ID in its response.
+
 ### Changed
 
 - LaunchAgent now uses unconditional `KeepAlive` so the bridge is relaunched
@@ -14,6 +26,8 @@ versions follow [Semantic Versioning](https://semver.org/).
   `KeepAlive(SuccessfulExit=false)` told launchd not to relaunch a clean exit.
   Stop the service with `ferry uninstall` (boots the job out of launchd).
   Existing installs must re-run `ferry install` to re-render the plist.
+- Supervisor logs now identify the running version and PID, the shutdown signal,
+  and the exit reason to make unexpected restarts easier to diagnose.
 
 ## [0.2.0] - 2026-05-25
 
@@ -79,6 +93,8 @@ Initial release.
 - `ferry install` LaunchAgent for auto-start at login with restart-on-crash.
 - CLI: `init`, `run`, `setup`, `install`, `uninstall`, `status`, `logs`.
 
-[Unreleased]: https://github.com/dalberto/mcp-ferry/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/dalberto/mcp-ferry/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/dalberto/mcp-ferry/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/dalberto/mcp-ferry/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/dalberto/mcp-ferry/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/dalberto/mcp-ferry/releases/tag/v0.1.0
