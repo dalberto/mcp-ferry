@@ -27,6 +27,14 @@ logger = logging.getLogger(__name__)
 # room so a big-but-legitimate response doesn't look like a crash.
 MAX_LINE_BYTES = 16 * 1024 * 1024
 STOP_GRACE_SECONDS = 5.0
+# A request timeout alone can't tell "one slow call" from "upstream stopped
+# answering" — and a process that is alive but mute otherwise stays "healthy"
+# indefinitely, every call burning the full timeout. After a timeout, a ping
+# this fast decides: no answer means the process is wedged and gets replaced.
+PROBE_TIMEOUT_SECONDS = 5.0
+# Every request after a restart waits on the replayed handshake; bound it so a
+# hung replay can't hold all callers for a full request_timeout.
+INITIALIZE_TIMEOUT_SECONDS = 10.0
 
 
 class StdioMCP:
@@ -44,6 +52,7 @@ class StdioMCP:
         self._initialize_request: dict[str, Any] | None = None
         self._initialize_response: dict[str, Any] | None = None
         self._stopping = False
+        self._probe_task: asyncio.Task[None] | None = None
 
     @property
     def health(self) -> bool:
@@ -93,6 +102,8 @@ class StdioMCP:
             return
         self._stopping = True
         proc = self._proc
+        if self._probe_task is not None and not self._probe_task.done():
+            self._probe_task.cancel()
 
         # Closing stdin sends EOF — well-behaved MCP servers exit cleanly on it.
         if proc.stdin is not None and not proc.stdin.is_closing():
@@ -117,6 +128,16 @@ class StdioMCP:
         logger.info("stopped MCP %s", self.config.name)
 
     async def send(self, message: dict[str, Any]) -> dict[str, Any] | None:
+        if message.get("method") == "server/discover" and message.get("id") is not None:
+            # Newer clients probe with server/discover under a short deadline
+            # before falling back to initialize. Answer locally so the probe
+            # never depends on upstream health (and strict upstreams don't log
+            # a validation dump for it).
+            return {
+                "jsonrpc": "2.0",
+                "id": message["id"],
+                "error": {"code": -32601, "message": "Method not found: server/discover"},
+            }
         # Remote clients have separate HTTP sessions, but share ONE stdio
         # connection. Strict servers (including Bear) reject a second initialize.
         if message.get("method") == "initialize" and message.get("id") is not None:
@@ -141,7 +162,11 @@ class StdioMCP:
                 raise ConnectionError(f"MCP {self.config.name} not running")
             if self._initialize_response is None:
                 try:
-                    response = await self._send(message)
+                    response = await self._send(
+                        message,
+                        wait_seconds=min(self.config.request_timeout, INITIALIZE_TIMEOUT_SECONDS),
+                        probe=False,  # a failed handshake already forces a restart
+                    )
                     assert response is not None
                     if "result" not in response:
                         return response  # failed negotiation must not be cached
@@ -156,7 +181,13 @@ class StdioMCP:
                 self._initialize_response = response
             return {**self._initialize_response, "id": message["id"]}
 
-    async def _send(self, message: dict[str, Any]) -> dict[str, Any] | None:
+    async def _send(
+        self,
+        message: dict[str, Any],
+        wait_seconds: float | None = None,
+        probe: bool = True,
+    ) -> dict[str, Any] | None:
+        timeout = self.config.request_timeout if wait_seconds is None else wait_seconds
         if not self.health or self._proc is None or self._proc.stdin is None:
             raise ConnectionError(f"MCP {self.config.name} not running")
 
@@ -180,12 +211,13 @@ class StdioMCP:
         self._pending[internal_id] = future
         try:
             await self._write(line)
-            resp = await asyncio.wait_for(future, timeout=self.config.request_timeout)
+            resp = await asyncio.wait_for(future, timeout=timeout)
             return {**resp, "id": client_id}
         except TimeoutError as e:
+            if probe:
+                self._schedule_liveness_probe()
             raise TimeoutError(
-                f"MCP {self.config.name} did not respond to id {client_id!r} "
-                f"within {self.config.request_timeout}s"
+                f"MCP {self.config.name} did not respond to id {client_id!r} within {timeout}s"
             ) from e
         finally:
             self._pending.pop(internal_id, None)
@@ -267,6 +299,32 @@ class StdioMCP:
                     logger.info("MCP %s [stderr]: %s", self.config.name, text)
         except Exception:
             logger.exception("MCP %s: stderr reader crashed", self.config.name)
+
+    def _schedule_liveness_probe(self) -> None:
+        # One probe at a time: a burst of timeouts is one verdict, not N pings.
+        if self._probe_task is not None and not self._probe_task.done():
+            return
+        self._probe_task = asyncio.create_task(
+            self._probe_liveness(), name=f"{self.config.name}-probe"
+        )
+
+    async def _probe_liveness(self) -> None:
+        proc = self._proc
+        try:
+            await self._send(
+                {"jsonrpc": "2.0", "id": "ferry-liveness", "method": "ping"},
+                wait_seconds=min(PROBE_TIMEOUT_SECONDS, self.config.request_timeout),
+                probe=False,
+            )
+        except TimeoutError:
+            if self._proc is proc:  # never kill a replacement started meanwhile
+                logger.warning(
+                    "MCP %s: no ping reply after a request timeout; killing wedged process",
+                    self.config.name,
+                )
+                self._force_down()
+        except ConnectionError:
+            pass  # already down; the supervisor restarts it
 
     def _force_down(self) -> None:
         proc = self._proc

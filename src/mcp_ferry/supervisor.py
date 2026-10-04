@@ -85,6 +85,10 @@ async def run(config: FerryConfig) -> int:
             port=config.bridge.local_port,
             log_level="info",
             access_log=True,
+            # Propagate uvicorn's loggers (access log included) to the root
+            # handlers so requests land in ferry.log with timestamps, instead
+            # of untimestamped lines in launchd's stdout file.
+            log_config=None,
         )
     )
 

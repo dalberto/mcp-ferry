@@ -5,6 +5,23 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A stdio server that stops answering is now replaced instead of being treated as
+  healthy. After any request timeout, ferry pings the server; no reply within 5s
+  kills the process so the supervisor restarts it. Previously a wedged server
+  made every call wait the full timeout until the bridge was restarted.
+- The handshake replayed after a subprocess restart is capped at 10s, so a hung
+  replay no longer holds every queued request for the full `request_timeout`.
+- Upstream timeouts return a JSON-RPC error (`-32001`) instead of an HTTP 500.
+
+### Changed
+
+- Ferry answers `server/discover` itself with "method not found", so clients'
+  short version-negotiation probes never depend on upstream health.
+- uvicorn's access log goes to `ferry.log` with timestamps, and log timestamps now
+  include the date.
+
 ## [0.2.1] - 2026-09-18
 
 ### Fixed

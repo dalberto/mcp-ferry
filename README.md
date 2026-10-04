@@ -362,6 +362,12 @@ path = "/things"
 command = "uvx things-mcp"
 ```
 
+Each `[[mcps]]` block accepts `request_timeout` (seconds, default 300). Set it
+close to the server's slowest legitimate call: a timed-out call is answered with
+a JSON-RPC error, and if the server then misses a liveness ping, ferry kills and
+restarts it. Servers that handle one request at a time can't answer the ping
+behind a slow call, so a call that overruns the timeout gets them restarted.
+
 Restart the bridge (`launchctl kickstart -k gui/$UID/io.github.dalberto.mcp-ferry`
 or just `ferry uninstall && ferry install`). The new MCP appears at
 `https://<hostname>/things`. No new tunnel, no new Access app needed.
