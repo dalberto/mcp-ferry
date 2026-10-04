@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from mcp_ferry import transport
 from mcp_ferry.config import MCPConfig
 from mcp_ferry.transport import StdioMCP
 
@@ -124,8 +125,8 @@ async def test_reader_death_with_live_process_is_not_a_zombie() -> None:
 
 
 async def test_send_times_out_fast_and_cleans_pending() -> None:
-    """A wedged subprocess must surface as a bounded TimeoutError, not an
-    infinite hang, and the timed-out id must not leak in _pending."""
+    """A slow call must surface as a bounded TimeoutError, not an infinite
+    hang, and the timed-out id must not leak in _pending."""
     timeout = 0.3
     m = StdioMCP(_config(request_timeout=timeout))
     await m.start()
@@ -134,14 +135,58 @@ async def test_send_times_out_fast_and_cleans_pending() -> None:
         t0 = loop.time()
         with pytest.raises(TimeoutError):
             await m.send(
-                {"jsonrpc": "2.0", "id": "slow", "method": "sleep", "params": {"seconds": 5}}
+                {"jsonrpc": "2.0", "id": "slow", "method": "slow", "params": {"seconds": 5}}
             )
         elapsed = loop.time() - t0
         assert elapsed < timeout + 1.0  # bounded, not hung
         assert m._pending == {}  # noqa: SLF001 — no leaked future
-        assert m.health  # process + reader still alive; only the call failed
     finally:
         await m.stop()
+
+
+async def test_timeout_on_responsive_upstream_keeps_process() -> None:
+    """One slow call on an upstream that still answers ping is not a wedge."""
+    m = StdioMCP(_config(request_timeout=0.3))
+    await m.start()
+    try:
+        with pytest.raises(TimeoutError):
+            await m.send(
+                {"jsonrpc": "2.0", "id": "slow", "method": "slow", "params": {"seconds": 5}}
+            )
+        assert m._probe_task is not None  # noqa: SLF001
+        await m._probe_task  # noqa: SLF001
+        assert m.health
+        resp = await m.send({"jsonrpc": "2.0", "id": "after", "method": "ping"})
+        assert resp is not None and resp["id"] == "after"
+    finally:
+        await m.stop()
+
+
+async def test_timeout_on_wedged_upstream_kills_process() -> None:
+    """An upstream that stops answering but stays alive must not stay
+    'healthy' with every call burning the full timeout. A timeout followed by
+    an unanswered ping must kill the process so the supervisor replaces it."""
+    m = StdioMCP(_config(request_timeout=0.3))
+    await m.start()
+    try:
+        with pytest.raises(TimeoutError):
+            await m.send(
+                {"jsonrpc": "2.0", "id": "stuck", "method": "sleep", "params": {"seconds": 30}}
+            )
+        await asyncio.wait_for(m.wait(), timeout=2.0)
+        assert not m.health
+    finally:
+        await m.stop()
+
+
+async def test_server_discover_answered_locally() -> None:
+    m = StdioMCP(_config())  # not started: the upstream must not be involved
+    resp = await m.send({"jsonrpc": "2.0", "id": 9, "method": "server/discover", "params": {}})
+    assert resp == {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "error": {"code": -32601, "message": "Method not found: server/discover"},
+    }
 
 
 async def test_large_response_over_64k_round_trips(mcp: StdioMCP) -> None:
@@ -263,3 +308,18 @@ async def test_interrupted_initialize_replaces_connection(
     await strict_mcp.start()
     recovered = await strict_mcp.send(_initialize(2))
     assert recovered is not None and "result" in recovered
+
+
+async def test_initialize_bounded_independently_of_request_timeout(
+    strict_mcp: StdioMCP, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every request after a restart queues behind the replayed handshake, so a
+    hung handshake must fail fast even when request_timeout is long."""
+    monkeypatch.setattr(transport, "INITIALIZE_TIMEOUT_SECONDS", 0.15)
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    with pytest.raises(TimeoutError):
+        await strict_mcp.send(_initialize(1, delay=10))
+    assert loop.time() - t0 < 1.0
+    await asyncio.wait_for(strict_mcp.wait(), timeout=2)
+    assert not strict_mcp.health

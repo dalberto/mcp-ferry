@@ -35,6 +35,20 @@ def _new_session_id() -> str:
     return secrets.token_urlsafe(24)
 
 
+async def _forward_request(mcp: StdioMCP, message: dict[str, Any]) -> dict[str, Any] | None:
+    # An upstream timeout is a per-call failure, not a bridge fault: answer it
+    # as a JSON-RPC error the client can surface, instead of an HTTP 500.
+    try:
+        return await mcp.send(message)
+    except TimeoutError as e:
+        logger.warning("%s", e)
+        return {
+            "jsonrpc": "2.0",
+            "id": message["id"],
+            "error": {"code": -32001, "message": str(e)},
+        }
+
+
 def _make_post_handler(mcp: StdioMCP, sessions: set[str]) -> Any:
     async def handler(request: Request) -> Response:
         if not mcp.health:
@@ -87,7 +101,7 @@ def _make_post_handler(mcp: StdioMCP, sessions: set[str]) -> Any:
         results: list[dict[str, Any]] = []
         for m in messages:
             if _is_request(m):
-                resp = await mcp.send(m)
+                resp = await _forward_request(mcp, m)
                 if resp is not None:
                     results.append(resp)
             else:
@@ -109,7 +123,7 @@ def _sse_response(
     async def gen() -> AsyncGenerator[dict[str, str]]:
         for m in messages:
             if _is_request(m):
-                resp = await mcp.send(m)
+                resp = await _forward_request(mcp, m)
                 if resp is not None:
                     yield {"data": json.dumps(resp)}
             else:

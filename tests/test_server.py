@@ -168,3 +168,20 @@ def test_reconnecting_clients_with_strict_server(accept: str) -> None:
             )
             assert tools.json()["result"] == {"tools": []}
             assert c.delete("/echo", headers=headers).status_code == 204
+
+
+def test_upstream_timeout_is_a_jsonrpc_error_not_500() -> None:
+    cfg = _ferry_config()
+    cfg.mcps[0].request_timeout = 0.3
+    transports = {m.name: StdioMCP(m) for m in cfg.mcps}
+    app = build_app(cfg, transports, manage_lifecycle=True)
+    with TestClient(app) as c:
+        r = c.post(
+            "/echo",
+            json={"jsonrpc": "2.0", "id": 5, "method": "slow", "params": {"seconds": 5}},
+            headers={"accept": "application/json"},
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] == 5
+    assert body["error"]["code"] == -32001

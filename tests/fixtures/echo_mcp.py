@@ -5,7 +5,10 @@ text-mode `sys.stdin` block-buffers and can withhold a lone line indefinitely,
 which is exactly the stall this fixture exists to test against.
 
 Cues (by ``method``):
-  - ``sleep`` ``{"params":{"seconds":N}}``  — wait N seconds, then echo.
+  - ``sleep`` ``{"params":{"seconds":N}}``  — wait N seconds, then echo. Blocks
+                                               the read loop (a wedged upstream).
+  - ``slow`` ``{"params":{"seconds":N}}``   — like ``sleep`` but on a thread, so
+                                               other requests (ping) still answer.
   - ``crash``                                — exit immediately (process dies).
   - ``close_stdout``                         — close stdout but keep the process
                                                alive (partial crash: reader sees
@@ -21,12 +24,28 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
+from typing import Any
+
+_write_lock = threading.Lock()
+
+
+def _reply(msg_id: object, result: object) -> None:
+    payload = json.dumps({"jsonrpc": "2.0", "id": msg_id, "result": result})
+    with _write_lock:
+        sys.stdout.buffer.write(payload.encode() + b"\n")
+        sys.stdout.buffer.flush()
+
+
+def _slow(msg: dict[str, Any]) -> None:
+    params: dict[str, Any] = msg.get("params", {})
+    time.sleep(float(params.get("seconds", 0)))
+    _reply(msg["id"], params)
 
 
 def main() -> None:
     stdin = sys.stdin.buffer
-    stdout = sys.stdout.buffer
     while True:
         raw = stdin.readline()
         if raw == b"":
@@ -49,6 +68,9 @@ def main() -> None:
             sys.stderr.write(f"notification: {method}\n")
             sys.stderr.flush()
             continue
+        if method == "slow":
+            threading.Thread(target=_slow, args=(msg,), daemon=True).start()
+            continue
         if method == "sleep":
             time.sleep(float(msg.get("params", {}).get("seconds", 0)))
         if method == "big":
@@ -56,9 +78,7 @@ def main() -> None:
             result: dict[str, object] = {"blob": "x" * size}
         else:
             result = msg.get("params", {})
-        payload = json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result})
-        stdout.write(payload.encode() + b"\n")
-        stdout.flush()
+        _reply(msg["id"], result)
 
 
 if __name__ == "__main__":
