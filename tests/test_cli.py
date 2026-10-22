@@ -454,3 +454,17 @@ def test_setup_fails_when_hostname_has_no_zone(
 
     assert result.exit_code == 1
     assert "no zone" in result.output
+
+
+def test_credentials_path_under_home_written_with_tilde(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_path = tmp_path / "config.toml"
+    _write_starter_config(config_path)
+
+    cli_mod._write_credentials_path_into_config(  # pyright: ignore[reportPrivateUsage]
+        config_path, tmp_path / ".cloudflared" / "TID.json"
+    )
+
+    assert 'credentials_file = "~/.cloudflared/TID.json"' in config_path.read_text()
