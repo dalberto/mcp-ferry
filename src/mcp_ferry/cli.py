@@ -65,7 +65,7 @@ local_port = 8765
 
 [cloudflare]
 tunnel_name = "mcp-ferry"
-# credentials_file = "/Users/you/.cloudflared/<tunnel-id>.json"  # auto-discovered if omitted
+# credentials_file = "~/.cloudflared/<tunnel-id>.json"  # auto-discovered if omitted
 # Set these to skip SDK discovery — then the API token needs neither
 # Account Settings:Read nor zone enumeration (find both in the Cloudflare
 # dashboard URL / the zone's Overview page):
@@ -342,15 +342,24 @@ def _pick_zone(client: Cloudflare, hostname: str) -> str:
     return best[1]
 
 
+def _home_relative(path: Path) -> str:
+    try:
+        return f"~/{path.relative_to(Path.home())}"
+    except ValueError:
+        return str(path)
+
+
 def _write_credentials_path_into_config(config_path: Path, credentials_path: Path) -> None:
     """Patch `cloudflare.credentials_file` in the user's config.toml.
 
-    Edit by line so we don't depend on a TOML round-tripping library.
+    Edit by line so we don't depend on a TOML round-tripping library. Paths
+    under the home directory are written as `~/...` so the config stays
+    portable across machines and usernames.
     """
     if not config_path.exists():
         return
     lines = config_path.read_text().splitlines()
-    new_line = f'credentials_file = "{credentials_path}"'
+    new_line = f'credentials_file = "{_home_relative(credentials_path)}"'
     in_cloudflare_section = False
     out: list[str] = []
     replaced = False

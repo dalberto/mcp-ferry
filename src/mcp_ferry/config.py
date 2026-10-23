@@ -7,6 +7,7 @@ path under one hostname; one tunnel fronts them all. Adding a new MCP is one
 
 from __future__ import annotations
 
+import os
 import shlex
 import tomllib
 from pathlib import Path
@@ -29,7 +30,7 @@ class CloudflareConfig(BaseModel):
     tunnel_name: str
     credentials_file: Path | None = Field(
         default=None,
-        description="Override auto-discovery of <tunnel-id>.json under ~/.cloudflared/",
+        description="Override auto-discovery of ~/.cloudflared/<tunnel-id>.json; '~' expands",
     )
     account_id: str | None = Field(
         default=None,
@@ -52,13 +53,20 @@ class CloudflareConfig(BaseModel):
         ),
     )
 
+    @field_validator("credentials_file")
+    @classmethod
+    def _expand_credentials_file(cls, v: Path | None) -> Path | None:
+        return v.expanduser() if v is not None else None
+
 
 class MCPConfig(BaseModel):
     """One stdio MCP server. Forwarded to from <hostname><path>."""
 
     name: str = Field(description="Short identifier, used in logs and the LaunchAgent label")
     path: str = Field(description="URL path prefix, e.g. '/bear'. Must start with '/'")
-    command: str = Field(description="Shell-style command, e.g. 'bearcli mcp-server'")
+    command: str = Field(
+        description="Shell-style command, e.g. 'bearcli mcp-server'; leading '~' per word expands"
+    )
     env: dict[str, str] = Field(default_factory=dict)
     cwd: Path | None = None
     request_timeout: float = Field(
@@ -74,6 +82,11 @@ class MCPConfig(BaseModel):
             raise ValueError("path must start with '/'")
         return v.rstrip("/") or "/"
 
+    @field_validator("cwd")
+    @classmethod
+    def _expand_cwd(cls, v: Path | None) -> Path | None:
+        return v.expanduser() if v is not None else None
+
     @field_validator("name")
     @classmethod
     def _name_is_slug(cls, v: str) -> str:
@@ -82,8 +95,12 @@ class MCPConfig(BaseModel):
         return v
 
     def argv(self) -> list[str]:
-        """Split command into argv for asyncio.create_subprocess_exec."""
-        return shlex.split(self.command)
+        """Split command into argv for asyncio.create_subprocess_exec.
+
+        Expands a leading '~' per word, as a shell would, so configs stay
+        portable across home directories.
+        """
+        return [os.path.expanduser(word) for word in shlex.split(self.command)]
 
 
 class FerryConfig(BaseModel):

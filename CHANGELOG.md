@@ -5,6 +5,12 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `~` expands in `cloudflare.credentials_file`, `mcps.cwd`, and each word of
+  `mcps.command`, so one `config.toml` works across home directories.
+  `ferry setup` now writes `credentials_file` as `~/...` when it's under home.
+
 ## [0.2.2] - 2026-10-04
 
 ### Fixed
