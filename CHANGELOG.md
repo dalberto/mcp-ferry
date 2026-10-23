@@ -5,6 +5,8 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-22
+
 ### Added
 
 - `~` expands in `cloudflare.credentials_file`, `mcps.cwd`, and each word of
@@ -118,7 +120,8 @@ Initial release.
 - `ferry install` LaunchAgent for auto-start at login with restart-on-crash.
 - CLI: `init`, `run`, `setup`, `install`, `uninstall`, `status`, `logs`.
 
-[Unreleased]: https://github.com/dalberto/mcp-ferry/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/dalberto/mcp-ferry/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/dalberto/mcp-ferry/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/dalberto/mcp-ferry/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/dalberto/mcp-ferry/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/dalberto/mcp-ferry/compare/v0.1.1...v0.2.0
