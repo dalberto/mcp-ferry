@@ -368,3 +368,108 @@ async def test_health_false_when_all_connections_drop(
     assert mgr.health is False
     # ready_event stayed set (connected once) — proving it can't be the signal.
     assert mgr.ready_event.is_set()
+
+
+def _fake_version_run(stdout: str) -> Any:
+    def fake_run(*_a: object, **_kw: object) -> Any:
+        result = MagicMock()
+        result.returncode = 0
+        result.stdout = stdout
+        result.stderr = ""
+        return result
+
+    return fake_run
+
+
+def _fake_info(executable: Path) -> Any:
+    info = MagicMock()
+    info.executable = str(executable)
+    return info
+
+
+def test_cloudflared_version_parses_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        tunnel_mod.subprocess,
+        "run",
+        _fake_version_run("cloudflared version 2026.10.3 (built 2026-10-21-13:12 UTC)\n"),
+    )
+    assert tunnel_mod.cloudflared_version("/fake/cloudflared") == (2026, 10, 3)
+
+
+def test_cloudflared_version_unparseable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tunnel_mod.subprocess, "run", _fake_version_run("garbage"))
+    assert tunnel_mod.cloudflared_version("/fake/cloudflared") is None
+
+
+def test_cloudflared_binary_current_version_skips_download(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    exe = tmp_path / "cloudflared"
+    exe.write_text("current")
+    monkeypatch.setattr(tunnel_mod, "get_info", lambda: _fake_info(exe))
+    monkeypatch.setattr(tunnel_mod, "cloudflared_version", lambda _b: (2026, 10, 2))  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    monkeypatch.setattr(tunnel_mod, "download", MagicMock(side_effect=AssertionError))
+
+    assert tunnel_mod.cloudflared_binary() == str(exe)
+
+
+def test_cloudflared_binary_outdated_redownloads(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    exe = tmp_path / "cloudflared"
+    exe.write_text("old")
+    monkeypatch.setattr(tunnel_mod, "get_info", lambda: _fake_info(exe))
+    monkeypatch.setattr(tunnel_mod, "cloudflared_version", lambda _b: (2025, 1, 0))  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+
+    def fake_download(_info: object) -> str:
+        assert not exe.exists()  # old binary moved aside, not overwritten
+        exe.write_text("new")
+        return str(exe)
+
+    monkeypatch.setattr(tunnel_mod, "download", fake_download)
+
+    assert tunnel_mod.cloudflared_binary() == str(exe)
+    assert exe.read_text() == "new"
+    assert not (tmp_path / "cloudflared.old").exists()
+
+
+def test_cloudflared_binary_failed_download_keeps_old(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    exe = tmp_path / "cloudflared"
+    exe.write_text("old")
+    monkeypatch.setattr(tunnel_mod, "get_info", lambda: _fake_info(exe))
+    monkeypatch.setattr(tunnel_mod, "cloudflared_version", lambda _b: (2025, 1, 0))  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    monkeypatch.setattr(tunnel_mod, "download", MagicMock(side_effect=OSError("offline")))
+
+    assert tunnel_mod.cloudflared_binary() == str(exe)
+    assert exe.read_text() == "old"
+
+
+def test_cloudflared_binary_unknown_version_used_as_is(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    exe = tmp_path / "cloudflared"
+    exe.write_text("mystery")
+    monkeypatch.setattr(tunnel_mod, "get_info", lambda: _fake_info(exe))
+    monkeypatch.setattr(tunnel_mod, "cloudflared_version", lambda _b: None)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    monkeypatch.setattr(tunnel_mod, "download", MagicMock(side_effect=AssertionError))
+
+    assert tunnel_mod.cloudflared_binary() == str(exe)
+
+
+def test_discover_credentials_file_uses_given_binary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(tunnel_mod, "CLOUDFLARED_DIR", tmp_path)
+    (tmp_path / "abc.json").write_text("{}")
+    seen: list[str] = []
+
+    def fake_run(cmd: list[str], **_kw: object) -> Any:
+        seen.append(cmd[0])
+        return _fake_version_run(json.dumps([{"id": "abc", "name": "mcp-bridge"}]))()
+
+    monkeypatch.setattr(tunnel_mod.subprocess, "run", fake_run)
+
+    discover_credentials_file("mcp-bridge", "/bundled/cloudflared")
+    assert seen == ["/bundled/cloudflared"]

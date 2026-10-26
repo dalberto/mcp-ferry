@@ -5,6 +5,15 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- cloudflared below 2026.10.2 (Cloudflare's current minimum) is re-downloaded on
+  tunnel start. pycloudflared fetches the latest release once and never updates
+  it, so older installs stayed on whatever was current at first run. If the
+  download fails, ferry logs an error and keeps running the old binary.
+- Credentials auto-discovery uses the bundled cloudflared instead of requiring
+  `cloudflared` on `PATH`.
+
 ## [0.3.0] - 2026-10-22
 
 ### Added
