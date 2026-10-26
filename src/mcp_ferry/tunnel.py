@@ -31,14 +31,62 @@ CONN_DOWN_PATTERN = re.compile(
 )
 CONN_INDEX_PATTERN = re.compile(r"connIndex=(\d+)")
 STOP_GRACE_SECONDS = 5.0
+# Oldest connector Cloudflare still supports. Bump when Cloudflare announces a
+# new floor; older binaries are re-downloaded on next tunnel start.
+MIN_CLOUDFLARED_VERSION = (2026, 10, 2)
+VERSION_PATTERN = re.compile(r"version (\d+)\.(\d+)\.(\d+)")
+
+
+def cloudflared_version(binary: str) -> tuple[int, ...] | None:
+    """Parse `cloudflared --version`; None if it can't be run or read."""
+    try:
+        result = subprocess.run(  # noqa: S603
+            [binary, "--version"], capture_output=True, text=True, check=False, timeout=10
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    match = VERSION_PATTERN.search(result.stdout)
+    if match is None:
+        return None
+    return tuple(int(part) for part in match.groups())
 
 
 def cloudflared_binary() -> str:
-    """Path to the cloudflared executable; download if pycloudflared hasn't yet."""
+    """Path to the cloudflared executable, downloading or refreshing as needed.
+
+    pycloudflared downloads `releases/latest` once and never updates it, so an
+    install keeps whatever was current on first run. Cloudflare periodically
+    deprecates old connector versions; below MIN_CLOUDFLARED_VERSION we fetch
+    the latest release again.
+    """
     info = get_info()
-    if not Path(info.executable).exists():
+    executable = Path(info.executable)
+    if not executable.exists():
         return download(info)
-    return info.executable
+
+    version = cloudflared_version(info.executable)
+    if version is None:
+        logger.warning("could not determine cloudflared version at %s; using it as-is", executable)
+        return info.executable
+    if version >= MIN_CLOUDFLARED_VERSION:
+        return info.executable
+
+    current = ".".join(map(str, version))
+    floor = ".".join(map(str, MIN_CLOUDFLARED_VERSION))
+    logger.warning("cloudflared %s is below minimum %s; downloading latest", current, floor)
+    # Move the old binary aside rather than overwrite it: writing over a
+    # running binary in place can kill it, and we restore it if the download
+    # fails so a network blip doesn't turn a deprecation into an outage.
+    backup = executable.with_name(executable.name + ".old")
+    executable.replace(backup)
+    try:
+        path = download(info)
+    except Exception:
+        logger.exception("cloudflared download failed; keeping %s", current)
+        backup.replace(executable)
+        return info.executable
+    backup.unlink(missing_ok=True)
+    return path
 
 
 def render_config_yaml(config: FerryConfig, credentials_file: Path) -> str:
@@ -120,15 +168,15 @@ class TunnelManager:
         )
 
     async def start(self) -> None:
+        binary = cloudflared_binary()
         creds = self._config.cloudflare.credentials_file or discover_credentials_file(
-            self._config.cloudflare.tunnel_name
+            self._config.cloudflare.tunnel_name, binary
         )
         # Fresh incarnation: drop connIndexes from any prior (crashed) process.
         self._live_conns.clear()
         CLOUDFLARED_DIR.mkdir(parents=True, exist_ok=True)
         CONFIG_YAML.write_text(render_config_yaml(self._config, creds))
 
-        binary = cloudflared_binary()
         logger.info(
             "starting cloudflared (%s) for tunnel %s",
             binary,

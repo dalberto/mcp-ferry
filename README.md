@@ -417,6 +417,11 @@ flag that would make it easy to expose your data with no auth.
 - `ferry logs -f`: tail the rotated `ferry.log` by default. Pass `--stream out` or `--stream err` for the LaunchAgent boot files.
 - `cloudflared` not finding the tunnel: confirm `cloudflare.credentials_file`
   in `config.toml` points at the JSON file the wizard wrote.
+- Cloudflare says your connector is outdated: ferry re-downloads cloudflared on
+  start when it's below the minimum it knows about. If the notice names a newer
+  floor than your ferry release, force a refresh with
+  `uv tool install --reinstall mcp-ferry`, then restart the bridge
+  (`ferry uninstall && ferry install`).
 - Access redirect loop: verify the Google authorized redirect URI is exactly
   `https://<team>.cloudflareaccess.com/cdn-cgi/access/callback` and that the
   Access app's allowed IdP is the one the wizard created.
